@@ -4,6 +4,9 @@ const ws_1 = require("ws");
 const models_1 = require("./models");
 const helpers_1 = require("./helpers");
 const wss = new ws_1.WebSocketServer({ port: 8080 });
+console.log('wss started');
+console.log('wss.path', wss.path);
+console.log('wss.address', wss.address);
 const rooms = new Map();
 const users = new Map();
 wss.on('connection', (ws) => {

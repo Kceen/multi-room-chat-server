@@ -14,6 +14,10 @@ import { convertMessageRecieve, convertMessageSend } from './helpers'
 
 const wss = new WebSocketServer({ port: 8080 })
 
+console.log('wss started')
+console.log('wss.path', wss.path)
+console.log('wss.address', wss.address)
+
 const rooms = new Map<string, IRoom>()
 const users = new Map<WebSocket, IUser>()
 
