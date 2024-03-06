@@ -1,105 +1,112 @@
 import { WebSocketServer, WebSocket } from 'ws'
+import { IRoom, IUser, IWSMessageType } from './models/Generic'
+import { broadcastToRoom, convertMessageRecieve, convertMessageSend } from './helpers'
 import {
-  ICreateNewRoomRequestPayload,
-  IJoinedNewRoomResponsePayload,
-  IWSMessage,
-  IWSMessageType,
-  IRoom,
-  IUser,
-  INewMessagePayload,
-  IMessage,
-  IJoinRoomRequestPayload
-} from './models'
-import { convertMessageRecieve, convertMessageSend } from './helpers'
+  I_JOIN_ROOM_ClientPayload,
+  I_NEW_MESSAGE_ClientPayload,
+  I_USER_INFO_ClientPayload
+} from './models/Payload/Client'
+import crypto from 'crypto'
+import {
+  I_CREATE_NEW_ROOM_ServerPayload,
+  I_JOIN_ROOM_ServerPayload,
+  I_NEW_MESSAGE_ServerPayload,
+  I_NOTIFICATION_ServerPayload,
+  I_USER_INFO_ServerPayload
+} from './models/Payload/Server'
 
-const wss = new WebSocketServer({ port: 8080 })
+export const wss = new WebSocketServer({ port: 8080 })
 
-console.log('wss started')
-console.log('wss.path', wss.path)
-console.log('wss.address', wss.address)
-
-const rooms = new Map<string, IRoom>()
-const users = new Map<WebSocket, IUser>()
+export const rooms = new Map<string, IRoom>()
+export const users = new Map<WebSocket, IUser>()
 
 wss.on('connection', (ws) => {
   ws.on('message', (data) => {
     const message = convertMessageRecieve(data)
 
     if (message.type === IWSMessageType.USER_INFO) {
-      users.set(ws, message.data as IUser)
+      const payload: I_USER_INFO_ClientPayload = message.data
+      const newUser: IUser = { ...payload, id: crypto.randomUUID() }
+
+      users.set(ws, newUser)
+
+      const payloadToSend: I_USER_INFO_ServerPayload = {
+        user: newUser
+      }
+      ws.send(convertMessageSend({ type: IWSMessageType.USER_INFO, data: payloadToSend }))
     }
 
     if (message.type === IWSMessageType.CREATE_NEW_ROOM) {
-      const newRoomId = (message.data as ICreateNewRoomRequestPayload).roomId
+      const newRoomId = crypto.randomUUID()
+      const newRoom: IRoom = { id: newRoomId, messages: [], users: [ws] }
 
-      if (rooms.get(newRoomId)) {
-        return
+      rooms.set(newRoom.id, newRoom)
+
+      const payload: I_CREATE_NEW_ROOM_ServerPayload = {
+        room: {
+          id: newRoomId,
+          messages: []
+        }
       }
 
-      rooms.set(newRoomId, {
-        id: newRoomId,
-        users: [ws],
-        messages: []
-      })
+      const notificationPayload: I_NOTIFICATION_ServerPayload = {
+        content: 'Created a new room with id - ' + newRoomId
+      }
 
-      ws.send(
-        convertMessageSend({
-          type: IWSMessageType.JOIN_ROOM,
-          data: { roomId: newRoomId } as IJoinedNewRoomResponsePayload
-        })
-      )
-    }
-
-    if (message.type === IWSMessageType.NEW_MESSAGE) {
-      const data = message.data as INewMessagePayload
-
-      const user = users.get(ws)
-      const room = rooms.get(data.roomId)
-
-      room?.messages.push({ content: data.content, user: user! })
-
-      broadcastToRoom(room!.id, {
-        type: IWSMessageType.NEW_MESSAGE,
-        data: { content: data.content, user } as IMessage
-      })
+      ws.send(convertMessageSend({ type: IWSMessageType.CREATE_NEW_ROOM, data: payload }))
+      ws.send(convertMessageSend({ type: IWSMessageType.NOTIFICATION, data: notificationPayload }))
     }
 
     if (message.type === IWSMessageType.JOIN_ROOM) {
-      const data = message.data as IJoinRoomRequestPayload
+      const payload: I_JOIN_ROOM_ClientPayload = message.data
 
-      const room = rooms.get(data.roomId)
-      const userAlreadyInRoom = room?.users.includes(ws)
+      const room = rooms.get(payload.roomId)
 
-      if (room && !userAlreadyInRoom) {
+      if (room && !room.users.includes(ws)) {
         room.users.push(ws)
 
+        const payload: I_JOIN_ROOM_ServerPayload = {
+          room: {
+            id: room.id,
+            messages: room.messages
+          }
+        }
+        ws.send(convertMessageSend({ type: IWSMessageType.JOIN_ROOM, data: payload }))
+
+        const notificationPayload: I_NOTIFICATION_ServerPayload = {
+          content: `Successfully joined room`
+        }
         ws.send(
-          convertMessageSend({
-            type: IWSMessageType.JOIN_ROOM,
-            data: { roomId: room!.id } as IJoinedNewRoomResponsePayload
-          })
+          convertMessageSend({ type: IWSMessageType.NOTIFICATION, data: notificationPayload })
         )
+      }
+
+      if (!room) {
+        const notificationPayload: I_NOTIFICATION_ServerPayload = {
+          content: `Room with given ID doesn't exist`
+        }
+        ws.send(
+          convertMessageSend({ type: IWSMessageType.NOTIFICATION, data: notificationPayload })
+        )
+      }
+    }
+
+    if (message.type === IWSMessageType.NEW_MESSAGE) {
+      const payload: I_NEW_MESSAGE_ClientPayload = message.data
+
+      const room = rooms.get(payload.roomId)
+
+      if (room) {
+        room.messages.push(payload.message)
+
+        const payloadToSend: I_NEW_MESSAGE_ServerPayload = {
+          roomId: room.id,
+          message: payload.message
+        }
+        broadcastToRoom(room.id, { type: IWSMessageType.NEW_MESSAGE, data: payloadToSend })
       }
     }
   })
 
   ws.on('error', console.error)
 })
-
-function broadcast(data: IWSMessage) {
-  wss.clients.forEach((client) => {
-    if (client.readyState === WebSocket.OPEN) {
-      client.send(convertMessageSend(data))
-    }
-  })
-}
-
-function broadcastToRoom(roomId: string, data: IWSMessage) {
-  const room = rooms.get(roomId)
-
-  room?.users.forEach((user) => {
-    if (user.readyState === WebSocket.OPEN) {
-      user.send(convertMessageSend(data))
-    }
-  })
-}
